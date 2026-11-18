@@ -91,9 +91,9 @@ def now_iso() -> str:
 
 
 def new_run_id(name: str) -> str:
-    """e.g. 'qwen05b_toolcall-20261118-130501-a1b2' (sortable by time, unique)."""
+    """e.g. 'qwen05b_toolcall-20261118-130501-a1b2c3d4' (sortable by time, unique)."""
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{name}-{stamp}-{secrets.token_hex(2)}"
+    return f"{name}-{stamp}-{secrets.token_hex(4)}"
 
 
 def run_path(runs_dir: str | Path, run_id: str) -> Path:

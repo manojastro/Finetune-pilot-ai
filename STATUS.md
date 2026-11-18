@@ -7,8 +7,8 @@ Labels: **built** = code written · **tested** = tests pass on laptop (CPU) · *
 | 0 — setup | yes | yes | n/a | uv project, folder layout, ruff/pytest config, `finetunepilot version` CLI |
 | 1 — baseline QLoRA training | yes | yes | not yet run | dry run passes on CPU; Kaggle T4 run pending |
 | 2 — evaluation | yes | yes | not yet run | base vs tuned on Kaggle pending |
-| 3 — VRAM estimate + OOM recovery | yes | yes | not yet run | 156 tests total (7 slow); `--force-oom` on Kaggle pending |
-| 4 — agent (LangGraph) | no | no | not yet run | |
+| 3 — VRAM estimate + OOM recovery | yes | yes | not yet run | `--force-oom` on Kaggle pending |
+| 4 — agent (LangGraph) | yes | yes | not yet run | 190 tests total (7 slow); dry run completes on CPU; real session pending |
 | 5 — API, UI, Docker | no | no | not yet run | |
 | 6 — portfolio polish | no | no | n/a | |
 
@@ -72,6 +72,23 @@ Estimates for the default T4 config (these are estimates, not measurements):
 | batch 8 | 20.7 GiB | 12.5 GiB | no |
 | batch 8 + gradient checkpointing | 9.7 GiB | 12.5 GiB | yes |
 
+## Stage 4 detail
+
+| item | status |
+|---|---|
+| `agent/llm.py`: `LLMClient`, `AnthropicClient` (model from `configs/agent.yaml`), `FakeLLM`, `ask_json` (validate, 1 retry, fail) | built, tested (fake SDK client; no network) |
+| `agent/state.py`: settings, `PlanProposal` / `ConfigChange` schemas, only 10 tunable fields | built, tested |
+| `agent/nodes.py` + `graph.py`: prepare → baseline → plan → estimate → approve → train → evaluate → diagnose → decide → report | built, tested |
+| checkpoint after every node (SQLite) + `--resume` | built, tested (simulated crash, then resume) |
+| `agent/toolbox.py`: real jobs, or simulated GPU work for `--dry-run` | built, tested |
+| `agent/report.py`: `reports/<session_id>.md` | built, tested |
+| `finetunepilot agent ...` | built, tested (dry run) |
+| `notebooks/04_agent_kaggle.ipynb` (real LLM + GPU) | built; not yet run |
+| Anthropic API calls | **never made** (tests use fakes; a real session needs your key and approval) |
+
+Dry-run numbers in agent reports are simulated by a toy quality function and are labelled so;
+they are not measurements.
+
 ## Decisions
 - Tool-call output format: Qwen native `<tool_call>{json}</tool_call>`.
 - torch is unpinned; on the laptop `uv sync` installs the CPU-only wheel, Kaggle keeps its own CUDA build.
@@ -97,4 +114,13 @@ Estimates for the default T4 config (these are estimates, not measurements):
   false TOKENIZER_ERROR matches in testing).
 - `finetunepilot train` stays single-attempt and in-process; `finetunepilot run` is the
   subprocess-per-attempt path.
+- Agent graph change vs. the original prompt: `decide` loops back to `estimate` (not `approve`),
+  so every diagnosed change is memory-checked before it runs. A `prepare` + `baseline` step was
+  added so "improved" has a base-model score to compare with.
+- The LLM can only set 10 hyperparameters; model, data paths, 4-bit, precision and seed are code-owned.
+- `diagnose` must change exactly one field to a new value; `decide` continues only if the last
+  run beat the best score so far (args_exact_match, then tool_name_accuracy, then json_valid).
+- The Anthropic client uses `claude-opus-5-5` from `configs/agent.yaml`, effort `medium`, and
+  server-side refusal fallback (`fallbacks: default`); set `fallbacks: null` to turn it off.
+- Run ids got 32 random bits (was 16): a flaky test showed same-second collisions.
 - Tests block all network access (see `tests/conftest.py`).

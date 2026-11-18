@@ -104,3 +104,42 @@ Every attempt is in the run JSON with what changed, why, the error class and evi
 duration. On Kaggle, run `notebooks/03_recovery_kaggle.ipynb`.
 
 Results: not yet measured.
+
+## Stage 4 — the agent
+
+```bash
+# Laptop: rule-based fake LLM + simulated training, whole loop in seconds
+uv run finetunepilot agent --objective "tool calling" --dry-run --yes
+
+# GPU box (needs ANTHROPIC_API_KEY; the API is billed): asks before every run unless --yes
+finetunepilot agent --objective "Pick the right tool with exact JSON arguments" \
+  --model Qwen/Qwen2.5-0.5B-Instruct --dataset data/sample --gpu t4 --max-runs 3 --max-minutes 90
+
+# Continue a session after a crash
+finetunepilot agent --resume <session_id>
+```
+
+```mermaid
+flowchart LR
+  prepare --> baseline --> plan --> estimate
+  estimate -- fits --> approve
+  estimate -- "doesn't fit" --> plan
+  approve -- yes --> train
+  approve -- no --> report
+  train -- ok --> evaluate --> diagnose --> decide
+  train -- failed --> decide
+  decide -- "improved, budget left" --> estimate
+  decide -- stop --> report
+```
+
+- **plan / diagnose** are the only LLM steps. The LLM returns a small JSON object (a config, or
+  one change and the reason). It is validated with pydantic, retried once if invalid, and only
+  10 hyperparameters can be set.
+- **estimate** checks the config against the VRAM estimate and sends it back to `plan` with the
+  numbers if it doesn't fit.
+- **train / evaluate** run the same code as `finetunepilot run` / `eval` and write run logs.
+- **decide** continues only if the last run beat the best score so far and runs and time are left.
+- **report** writes `reports/<session_id>.md`: every run, the best one, what changed and why.
+- State is checkpointed after every node (`runs/sessions/checkpoints.sqlite`).
+
+Results: not yet measured (only dry runs so far).

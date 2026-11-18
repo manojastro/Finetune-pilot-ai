@@ -58,6 +58,7 @@ def train(
 ) -> None:
     """Train LoRA adapters and write runs/<run_id>.json."""
     from finetunepilot.config import diff_configs, load_run_config
+    from finetunepilot.jobs import train_metrics
     from finetunepilot.runlog import Attempt, now_iso, start_run, write_run
     from finetunepilot.train import train as run_training
 
@@ -95,7 +96,7 @@ def train(
     attempt.status = "success"
     attempt.result = result.model_dump()
     log.status = "success"
-    log.metrics = _train_metrics(result.model_dump())
+    log.metrics = train_metrics(result.model_dump())
     log.artifacts = {"adapter_dir": result.output_dir}
     _finish(log, t0, attempt)
     write_run(log, runs)
@@ -131,15 +132,7 @@ def run(
 ) -> None:
     """Train with VRAM pre-check, automatic OOM/NaN recovery and a time budget."""
     from finetunepilot.config import load_run_config
-    from finetunepilot.runlog import start_run, write_run
-    from finetunepilot.runner import (
-        RecoveryPolicy,
-        detect_gpu_memory_gb,
-        make_subprocess_attempt,
-        measure_data_stats,
-        run_with_recovery,
-    )
-    from finetunepilot.tools.vram import GPU_MEMORY_GIB
+    from finetunepilot.jobs import run_training_job
 
     try:
         run_cfg = load_run_config(config)
@@ -148,66 +141,20 @@ def run(
     except (ValidationError, ValueError) as e:
         _exit_usage(f"Invalid config {config}:\n{e}")
 
-    cfg = run_cfg.train
-    gpu_gb = gpu_memory_gb or detect_gpu_memory_gb() or GPU_MEMORY_GIB["t4"]
-    policy = RecoveryPolicy(
-        max_attempts=max_attempts, max_minutes=max_minutes, gpu_memory_gb=gpu_gb
-    )
-    try:
-        data_stats = measure_data_stats(cfg, dry_run)
-    except Exception as e:  # the pre-check then falls back to max_seq_length
-        console.print(
-            f"[yellow]Could not measure token lengths ({e}); using max_seq_length.[/yellow]"
-        )
-        data_stats = None
-
-    log = start_run(
-        "train", run_cfg.name, dry_run=dry_run, seed=cfg.seed,
-        config={**run_cfg.model_dump(), "policy": policy.model_dump(), "force_oom": force_oom,
-                "data_stats": data_stats},
-    )  # fmt: skip
-    runs = runs_dir or Path(run_cfg.runs_dir)
-    t0 = time.perf_counter()
-    path = write_run(log, runs)
-    console.print(
-        f"Run [bold]{log.run_id}[/bold]: up to {max_attempts} attempts / {max_minutes:g} min, "
-        f"GPU {gpu_gb:g} GiB, dry_run={dry_run}, force_oom={force_oom}. Log: {path}"
-    )
-
-    def save_progress(attempts) -> None:
-        log.attempts = attempts
-        write_run(log, runs)
-
-    seq_len = (data_stats or {}).get("max_tokens")
-    outcome = run_with_recovery(
-        cfg,
-        policy,
-        output_dir=output_dir or Path(cfg.output_dir) / log.run_id,
-        attempt_fn=make_subprocess_attempt(dry_run, simulate_oom_gpu_gb=gpu_gb, seq_len=seq_len),
-        gpu_memory_gb=gpu_gb,
-        data_stats=data_stats,
+    log, path = run_training_job(
+        run_cfg,
+        max_attempts=max_attempts,
+        max_minutes=max_minutes,
+        dry_run=dry_run,
         force_oom=force_oom,
-        on_attempt=save_progress,
+        gpu_memory_gb=gpu_memory_gb,
+        output_dir=output_dir,
+        runs_dir=runs_dir,
+        say=console.print,
     )
-    log.attempts = outcome.attempts
-    log.precheck = outcome.precheck
-    # `train` is the YAML as written; these are what the runner actually started and ended with
-    # (they differ with --force-oom, or after pre-check / recovery fixes).
-    log.config["base_train"] = outcome.base_config.model_dump()
-    log.config["final_train"] = outcome.final_config.model_dump()
-    log.stop_reason = outcome.stop_reason
-    log.status = outcome.status
-    if outcome.result:
-        log.metrics = {**_train_metrics(outcome.result), "attempts": len(outcome.attempts)}
-        log.artifacts = {"adapter_dir": outcome.result["output_dir"]}
-    else:
-        log.metrics = {"attempts": len(outcome.attempts)}
-        log.errors = [a.error for a in outcome.attempts if a.error] or [outcome.stop_reason]
-    _finish(log, t0)
-    write_run(log, runs)
     _print_attempts(log)
-    console.print(f"[bold]{outcome.status}[/bold]: {outcome.stop_reason}. Run log: {path}")
-    if outcome.status != "success":
+    console.print(f"[bold]{log.status}[/bold]: {log.stop_reason}. Run log: {path}")
+    if log.status != "success":
         raise typer.Exit(1)
 
 
@@ -233,8 +180,8 @@ def eval_cmd(
     show_failures: int = typer.Option(5, min=0, help="How many wrong rows to print."),
 ) -> None:
     """Score tool-call accuracy on a test set and write runs/<run_id>.json."""
-    from finetunepilot.eval import EvalSettings, default_eval_name, evaluate
-    from finetunepilot.runlog import start_run, write_run
+    from finetunepilot.eval import EvalSettings, default_eval_name
+    from finetunepilot.jobs import run_eval_job
 
     if not test.is_file():
         _exit_usage(f"Test file not found: {test}")
@@ -251,24 +198,12 @@ def eval_cmd(
         seed=seed,
         dry_run=dry_run,
     )
-    log = start_run(
-        "eval", name or default_eval_name(adapter), dry_run=dry_run, seed=seed,
-        config=settings.model_dump(),
-    )  # fmt: skip
-    t0 = time.perf_counter()
-    path = write_run(log, runs_dir)
-    console.print(f"Eval [bold]{log.run_id}[/bold] started (dry_run={dry_run}). Log: {path}")
-
-    try:
-        result = evaluate(settings)
-    except Exception as e:
-        _fail(log, runs_dir, t0, e, "Evaluation")
-
-    log.status = "success"
-    log.metrics = {**result.summary, "peak_gpu_memory_mb": result.peak_gpu_memory_mb}
-    log.predictions = result.predictions
-    _finish(log, t0)
-    write_run(log, runs_dir)
+    log, path = run_eval_job(
+        settings, name=name or default_eval_name(adapter), runs_dir=runs_dir, say=console.print
+    )
+    if log.status != "success":
+        console.print(f"[red]Evaluation failed:[/red] {log.errors[0]}\nRun log: {path}")
+        raise typer.Exit(1)
 
     table = _summary_table(log, path)
     for key in ("n", "json_valid", "tool_name_accuracy", "args_key_match", "args_exact_match",
@@ -301,6 +236,100 @@ def compare(
         except ValidationError as e:
             _exit_usage(f"Not a valid run log: {path}\n{e}")
     console.print(render_comparison(runs))
+
+
+# --------------------------------------------------------------------------- agent
+
+
+@app.command()
+def agent(
+    objective: str | None = typer.Option(
+        None, "--objective", help="What the fine-tune should achieve."
+    ),
+    model: str = typer.Option("Qwen/Qwen2.5-0.5B-Instruct", "--model", help="Base model (HF id)."),
+    dataset: Path = typer.Option(
+        Path("data/sample"), "--dataset", help="Dir with train/test.jsonl."
+    ),
+    gpu: str = typer.Option("t4", "--gpu", help="GPU type: t4, p100, l4, a10g, a100-40gb."),
+    max_runs: int = typer.Option(3, min=1, max=10, help="At most this many training runs."),
+    max_minutes: float = typer.Option(90, min=1, help="Time budget for the whole session."),
+    yes: bool = typer.Option(False, "--yes", help="Approve every run without asking."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Rule-based fake LLM + simulated training/eval. Runs in seconds."
+    ),
+    resume: str | None = typer.Option(None, "--resume", help="Continue a session by its id."),
+    agent_config: Path = typer.Option(Path("configs/agent.yaml"), help="LLM settings file."),
+    runs_dir: Path = typer.Option(Path("runs")),
+    reports_dir: Path = typer.Option(Path("reports")),
+    sessions_dir: Path = typer.Option(Path("runs/sessions")),
+) -> None:
+    """Let the agent plan, run, diagnose and compare fine-tuning runs, then write a report."""
+    from finetunepilot.agent.graph import load_session_settings, resume_session, run_session
+    from finetunepilot.agent.llm import load_llm_settings
+    from finetunepilot.agent.state import AgentSettings
+
+    if resume:
+        try:
+            settings = load_session_settings(resume, sessions_dir)
+        except FileNotFoundError:
+            _exit_usage(f"No session {resume!r} in {sessions_dir}")
+        if yes:
+            settings = settings.model_copy(update={"auto_approve": True})
+        final = resume_session(resume, _agent_deps(settings), sessions_dir)
+    else:
+        if not objective:
+            _exit_usage("--objective is required (or use --resume <session_id>).")
+        for split in ("train.jsonl", "test.jsonl"):
+            if not (dataset / split).is_file():
+                _exit_usage(f"Missing {dataset / split}")
+        try:
+            settings = AgentSettings(
+                objective=objective, base_model=model, dataset_dir=str(dataset), gpu=gpu,
+                max_runs=max_runs, max_minutes=max_minutes, dry_run=dry_run, auto_approve=yes,
+                llm=load_llm_settings(agent_config), runs_dir=str(runs_dir),
+                reports_dir=str(reports_dir), sessions_dir=str(sessions_dir),
+            )  # fmt: skip
+        except (ValidationError, ValueError, FileNotFoundError) as e:
+            _exit_usage(f"Invalid agent settings: {e}")
+        if not dry_run:
+            console.print(
+                f"[yellow]This session calls the Anthropic API ({settings.llm.model}), which is "
+                "billed, and trains on the GPU.[/yellow]"
+            )
+        final = run_session(settings, _agent_deps(settings))
+
+    console.print(
+        f"[bold]Session {final['session_id']}: {final.get('status')}[/bold] - "
+        f"{final.get('stop_reason') or final.get('error') or ''}\n"
+        f"Report: {final.get('report_path')}"
+    )
+    if final.get("status") == "failed":
+        raise typer.Exit(1)
+
+
+def _agent_deps(settings):
+    from finetunepilot.agent.llm import AnthropicClient
+    from finetunepilot.agent.nodes import AgentDeps
+    from finetunepilot.agent.toolbox import DryRunLLM, RealToolbox, SimulatedToolbox
+
+    def approver(text: str) -> bool:
+        console.print(text, markup=False)
+        if settings.auto_approve:
+            console.print("Approved (--yes).")
+            return True
+        return typer.confirm("Start this run?", default=False)
+
+    if settings.dry_run:
+        return AgentDeps(
+            llm=DryRunLLM(), toolbox=SimulatedToolbox(settings.runs_dir), approver=approver,
+            say=console.print,
+        )  # fmt: skip
+    return AgentDeps(
+        llm=AnthropicClient(settings.llm),
+        toolbox=RealToolbox(settings.runs_dir, say=console.print),
+        approver=approver,
+        say=console.print,
+    )
 
 
 # --------------------------------------------------------------------------- helpers
@@ -337,20 +366,6 @@ def _fail(
     path = write_run(log, runs_dir)
     console.print(f"[red]{what} failed:[/red] {message}\nRun log: {path}")
     raise typer.Exit(1)
-
-
-def _train_metrics(result: dict) -> dict:
-    history = result.get("loss_history") or []
-    return {
-        "first_loss": history[0]["loss"] if history else None,
-        **{
-            k: result.get(k)
-            for k in (
-                "final_loss", "train_loss", "steps", "train_runtime_s",
-                "peak_gpu_memory_mb", "peak_gpu_memory_reserved_mb",
-            )
-        },
-    }  # fmt: skip
 
 
 def _print_attempts(log: RunLog) -> None:

@@ -55,7 +55,7 @@ Finetune-pilot-ai/
   STATUS.md
   README.md
   pyproject.toml
-  configs/            # YAML training configs
+  configs/            # YAML training configs + agent.yaml (LLM model name)
   data/sample/        # tiny tool-calling dataset committed to repo
   src/finetunepilot/
     config.py         # pydantic config models
@@ -66,10 +66,11 @@ Finetune-pilot-ai/
     eval.py           # tool-call accuracy evaluation
     runner.py         # runs training with OOM retry + budget cap
     worker.py         # one training attempt in its own subprocess
+    jobs.py           # one train/eval job -> runs/<run_id>.json (shared by CLI and agent)
     runlog.py         # writes/reads runs/*.json
     cli.py            # typer CLI
     tools/            # VRAM estimator, log parser, scoring, comparison
-    agent/            # LangGraph graph, nodes, LLM client
+    agent/            # LangGraph graph, nodes, LLM client, toolbox, report
     api/              # FastAPI app
   notebooks/          # Kaggle/Colab notebooks
   scripts/            # one-off scripts (e.g. sample data generator)
