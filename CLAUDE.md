@@ -65,6 +65,7 @@ Finetune-pilot-ai/
     train.py          # QLoRA training via TRL + PEFT
     eval.py           # tool-call accuracy evaluation
     runner.py         # runs training with OOM retry + budget cap
+    worker.py         # one training attempt in its own subprocess
     runlog.py         # writes/reads runs/*.json
     cli.py            # typer CLI
     tools/            # VRAM estimator, log parser, scoring, comparison

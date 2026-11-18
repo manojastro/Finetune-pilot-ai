@@ -92,3 +92,19 @@ def test_real_training_without_gpu_fails_clearly(t4_config, tmp_path) -> None:
         pytest.skip("machine has a GPU")
     with pytest.raises(RuntimeError, match="No CUDA GPU"):
         train(t4_config, output_dir=tmp_path, dry_run=False)
+
+
+def test_nan_loss_callback_stops_training() -> None:
+    from types import SimpleNamespace
+
+    from finetunepilot.tools.log_parser import classify_error
+    from finetunepilot.train import NanLossError, make_nan_loss_callback
+
+    callback = make_nan_loss_callback()
+    state = SimpleNamespace(global_step=7)
+    callback.on_log(None, state, None, logs={"loss": 0.5})  # finite: fine
+    callback.on_log(None, state, None, logs={"learning_rate": 1e-4})  # no loss: fine
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(NanLossError) as exc:
+            callback.on_log(None, state, None, logs={"loss": bad})
+        assert classify_error(exc.value).error_class == "NAN_LOSS"

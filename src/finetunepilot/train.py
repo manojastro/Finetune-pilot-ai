@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,23 @@ from pydantic import BaseModel
 
 from finetunepilot.config import TrainConfig
 from finetunepilot.data import build_sft_dataset, token_length_stats
+
+
+class NanLossError(RuntimeError):
+    """Raised when the training loss becomes NaN or inf (HF Trainer would keep going)."""
+
+
+def make_nan_loss_callback():
+    """A TrainerCallback that stops training with NanLossError on a NaN/inf logged loss."""
+    from transformers import TrainerCallback
+
+    class NanLossCallback(TrainerCallback):
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            loss = (logs or {}).get("loss")
+            if isinstance(loss, float) and not math.isfinite(loss):
+                raise NanLossError(f"NaN loss detected at step {state.global_step}: loss={loss}")
+
+    return NanLossCallback()
 
 
 class TrainResult(BaseModel):
@@ -137,12 +155,18 @@ def _load_dry_run(cfg: TrainConfig) -> tuple[Any, Any]:
 
 
 def train(
-    cfg: TrainConfig, output_dir: str | Path | None = None, dry_run: bool = False
+    cfg: TrainConfig,
+    output_dir: str | Path | None = None,
+    dry_run: bool = False,
+    on_data_stats: Callable[[dict[str, int]], None] | None = None,
 ) -> TrainResult:
     """Train LoRA adapters and save adapter + tokenizer to output_dir.
 
     With dry_run=True, `cfg` is first converted with `cfg.for_dry_run()`.
-    Raises ValueError if any row is longer than max_seq_length (the tool call would be cut off).
+    `on_data_stats` is called with the dataset token stats as soon as they are known, so a caller
+    still learns the longest row length if training later fails (the runner uses it).
+    Raises ValueError if any row is longer than max_seq_length (the tool call would be cut off),
+    and NanLossError if the loss becomes NaN/inf.
     """
     import torch
     from peft import get_peft_model
@@ -163,6 +187,8 @@ def train(
 
     dataset = build_sft_dataset(cfg.dataset_path, tokenizer).remove_columns("id")
     stats = token_length_stats(dataset, tokenizer, cfg.max_seq_length)
+    if on_data_stats is not None:
+        on_data_stats(stats)
     if stats["truncated"]:
         raise ValueError(
             f"{stats['truncated']} of {stats['rows']} rows are longer than max_seq_length="
@@ -176,6 +202,7 @@ def train(
         args=build_sft_config(cfg, out, use_cpu=not use_cuda),
         train_dataset=dataset,
         processing_class=tokenizer,
+        callbacks=[make_nan_loss_callback()],
     )
     train_output = trainer.train()
 

@@ -74,3 +74,37 @@ def test_train_dry_run_writes_run_json(tmp_path) -> None:
     }  # ... + changes
     assert log["artifacts"]["adapter_dir"] == str(tmp_path / "adapter")
     assert (tmp_path / "adapter" / "adapter_model.safetensors").exists()
+
+
+def test_run_refuses_to_start_when_estimate_cannot_fit(tmp_path) -> None:
+    runs = tmp_path / "runs"
+    result = runner.invoke(
+        app, ["run", "-c", str(CONFIG_PATH), "--dry-run", "--gpu-memory-gb", "1",
+              "--runs-dir", str(runs), "--output-dir", str(tmp_path / "out")],
+    )  # fmt: skip
+    assert result.exit_code == 1, result.output
+    (path,) = runs.glob("*.json")
+    log = json.loads(path.read_text())
+    assert log["status"] == "failed" and log["attempts"] == []
+    assert log["stop_reason"].startswith("won't fit") and log["precheck"]["status"] == "wont_fit"
+
+
+@pytest.mark.slow
+def test_run_force_oom_dry_run_recovers(tmp_path) -> None:
+    runs = tmp_path / "runs"
+    result = runner.invoke(
+        app, ["run", "-c", str(CONFIG_PATH), "--dry-run", "--force-oom", "--gpu-memory-gb", "14.7",
+              "--runs-dir", str(runs), "--output-dir", str(tmp_path / "out")],
+    )  # fmt: skip
+    assert result.exit_code == 0, result.output
+    (path,) = runs.glob("*.json")
+    log = json.loads(path.read_text())
+    assert log["status"] == "success" and log["stop_reason"] == "succeeded on attempt 3"
+    assert [a["error_class"] for a in log["attempts"]] == ["CUDA_OOM", "CUDA_OOM", None]
+    assert log["precheck"]["status"] == "skipped" and log["config"]["force_oom"] is True
+    assert log["config"]["base_train"]["per_device_batch_size"] == 16
+    assert log["config"]["final_train"]["gradient_checkpointing"] is True
+    last = log["attempts"][-1]["config_changes"]
+    assert last["per_device_batch_size"] == {"from": 16, "to": 8}
+    assert log["metrics"]["attempts"] == 3 and log["metrics"]["steps"] == 2
+    assert log["artifacts"]["adapter_dir"].endswith("attempt-3/adapter")

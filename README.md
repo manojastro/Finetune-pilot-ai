@@ -71,3 +71,36 @@ The eval run JSON stores every prediction, so wrong rows can be inspected later.
 On Kaggle, run `notebooks/02_eval_kaggle.ipynb`.
 
 Results: not yet measured.
+
+## Stage 3 — VRAM estimate and OOM recovery
+
+```bash
+# GPU: pre-check + automatic recovery, at most 4 attempts / 60 minutes
+finetunepilot run --config configs/qwen05b_toolcall.yaml --max-attempts 4 --max-minutes 60
+
+# Demo: batch 16, no pre-check -> real OOM, then recovery
+finetunepilot run --config configs/qwen05b_toolcall.yaml --force-oom
+
+# Laptop: same loop with a tiny model; OOM is simulated from the VRAM estimate
+uv run finetunepilot run --config configs/qwen05b_toolcall.yaml --dry-run --force-oom
+```
+
+How it works:
+1. **Pre-check.** `tools/vram.py` estimates memory for weights (4-bit), LoRA params, gradients,
+   optimizer state, activations and logits at the longest row in the data. If it doesn't fit the
+   GPU (minus a 15% margin), the config is shrunk first. This is an estimate: its activation
+   coefficients were measured on CPU and still need checking against real GPU peaks.
+2. **Attempt.** Each attempt runs in a fresh subprocess (`finetunepilot.worker`), so an OOM
+   can't leave the next attempt with less GPU memory.
+3. **Diagnose.** `tools/log_parser.py` classifies the failure: `CUDA_OOM`, `NAN_LOSS`,
+   `DATASET_ERROR`, `TOKENIZER_ERROR` or `UNKNOWN`, together with the log line that showed it.
+4. **Fix and retry.** For OOM: halve the batch (doubling grad accumulation), then turn on
+   gradient checkpointing, then cut `max_seq_length` by 25%. For a NaN loss: halve the learning
+   rate. Other errors stop the run. Only fields in the policy's `allowed_changes` are ever touched.
+5. **Budget.** Stops at `--max-attempts` or `--max-minutes`. A running attempt is killed when
+   the time is up.
+
+Every attempt is in the run JSON with what changed, why, the error class and evidence, and the
+duration. On Kaggle, run `notebooks/03_recovery_kaggle.ipynb`.
+
+Results: not yet measured.

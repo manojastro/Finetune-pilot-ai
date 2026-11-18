@@ -27,14 +27,16 @@ TRACKED_PACKAGES = [
 
 
 class Attempt(BaseModel):
-    """One try at training. Stage 3 adds retries; stage 1 always has exactly one attempt."""
+    """One try at training. `finetunepilot run` may make several; `train` makes exactly one."""
 
     attempt: int = Field(ge=1)
-    status: RunStatus
+    status: Literal["running", "success", "failed", "timeout"]
     started_at: str
     duration_s: float | None = None
     config_changes: dict[str, Any] = Field(default_factory=dict)  # vs. the run's base config
+    fix: str | None = None  # what the runner changed before this attempt, and why
     error_class: str | None = None
+    evidence: str | None = None  # the log line that identified error_class
     error: str | None = None
     result: dict[str, Any] = Field(default_factory=dict)
 
@@ -58,6 +60,8 @@ class RunLog(BaseModel):
     errors: list[str] = Field(default_factory=list)
     artifacts: dict[str, str] = Field(default_factory=dict)
     predictions: list[dict[str, Any]] = Field(default_factory=list)  # eval runs only
+    precheck: dict[str, Any] = Field(default_factory=dict)  # VRAM pre-check (finetunepilot run)
+    stop_reason: str | None = None  # why a multi-attempt run ended
 
 
 def start_run(

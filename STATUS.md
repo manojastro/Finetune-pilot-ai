@@ -6,8 +6,8 @@ Labels: **built** = code written · **tested** = tests pass on laptop (CPU) · *
 |---|---|---|---|---|
 | 0 — setup | yes | yes | n/a | uv project, folder layout, ruff/pytest config, `finetunepilot version` CLI |
 | 1 — baseline QLoRA training | yes | yes | not yet run | dry run passes on CPU; Kaggle T4 run pending |
-| 2 — evaluation | yes | yes | not yet run | 102 tests total (5 slow); base vs tuned on Kaggle pending |
-| 3 — VRAM estimate + OOM recovery | no | no | not yet run | |
+| 2 — evaluation | yes | yes | not yet run | base vs tuned on Kaggle pending |
+| 3 — VRAM estimate + OOM recovery | yes | yes | not yet run | 156 tests total (7 slow); `--force-oom` on Kaggle pending |
 | 4 — agent (LangGraph) | no | no | not yet run | |
 | 5 — API, UI, Docker | no | no | not yet run | |
 | 6 — portfolio polish | no | no | n/a | |
@@ -49,6 +49,29 @@ Metric definitions:
 - `args_exact_match`: right tool and equal arguments (key order ignored, `5 == 5.0`, `"5" != 5`).
 - `format_ok`: output is exactly `<tool_call>\n{json}\n</tool_call>`.
 
+## Stage 3 detail
+
+| item | status |
+|---|---|
+| `tools/vram.py` estimate with breakdown + `fits` (incl. logits term) | built, tested |
+| activation coefficients (16.5·h + 5·I per token per layer; h with checkpointing) | measured on CPU (autograd saved bytes, Qwen2.5-0.5B shapes + LoRA r=16); GPU accuracy not yet measured |
+| `tools/log_parser.py` → CUDA_OOM / NAN_LOSS / DATASET_ERROR / TOKENIZER_ERROR / UNKNOWN + evidence | built, tested |
+| NaN-loss callback in `train.py` | built, tested |
+| `worker.py`: one attempt per subprocess, result file, crash + timeout handling | built, tested |
+| `runner.py`: pre-check, OOM ladder, NaN fix, budget, allowed-changes guard, per-attempt log | built, tested (fake attempts) |
+| `finetunepilot run [--force-oom] [--dry-run]` | built, tested (dry run: 16 OOM → 8 OOM → 8+GC succeeds, OOM simulated from the estimate) |
+| `notebooks/03_recovery_kaggle.ipynb` | built; not yet run |
+
+Estimates for the default T4 config (these are estimates, not measurements):
+
+| config | estimate | limit (14.7 GiB − 15%) | fits |
+|---|---|---|---|
+| batch 4, longest row 762 tokens | 11.0 GiB | 12.5 GiB | yes |
+| batch 4, padded to 1024 | 14.4 GiB | 12.5 GiB | no |
+| batch 16 (`--force-oom`) | 40.0 GiB | 12.5 GiB | no |
+| batch 8 | 20.7 GiB | 12.5 GiB | no |
+| batch 8 + gradient checkpointing | 9.7 GiB | 12.5 GiB | yes |
+
 ## Decisions
 - Tool-call output format: Qwen native `<tool_call>{json}</tool_call>`.
 - torch is unpinned; on the laptop `uv sync` installs the CPU-only wheel, Kaggle keeps its own CUDA build.
@@ -63,4 +86,15 @@ Metric definitions:
 - `max_new_tokens=128` is fixed: the longest target tool call is 58 Qwen tokens.
 - Inside `<tool_call>` or a code fence the payload must itself be a JSON object; only free text
   gets the "first JSON object anywhere" search.
+- The pre-check estimates at the longest row in the data (measured with the tokenizer before
+  launching), not `max_seq_length`, because batches are only padded to their longest row.
+- OOM fixes are applied one per failure in the given order, then the batch keeps halving.
+  If the pre-check can't make the config fit with allowed fixes, the run stops before launching.
+- `--force-oom` sets batch 16 and skips the pre-check (otherwise the pre-check would prevent the OOM).
+- Dry runs simulate OOM when the real config's estimate exceeds the GPU size, so the recovery
+  loop can be shown on a laptop.
+- The error parser reads only message lines, never indented traceback code lines (which caused
+  false TOKENIZER_ERROR matches in testing).
+- `finetunepilot train` stays single-attempt and in-process; `finetunepilot run` is the
+  subprocess-per-attempt path.
 - Tests block all network access (see `tests/conftest.py`).

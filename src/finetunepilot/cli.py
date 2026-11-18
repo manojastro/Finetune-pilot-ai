@@ -95,16 +95,7 @@ def train(
     attempt.status = "success"
     attempt.result = result.model_dump()
     log.status = "success"
-    log.metrics = {
-        "first_loss": result.loss_history[0]["loss"] if result.loss_history else None,
-        **{
-            k: getattr(result, k)
-            for k in (
-                "final_loss", "train_loss", "steps", "train_runtime_s",
-                "peak_gpu_memory_mb", "peak_gpu_memory_reserved_mb",
-            )
-        },
-    }  # fmt: skip
+    log.metrics = _train_metrics(result.model_dump())
     log.artifacts = {"adapter_dir": result.output_dir}
     _finish(log, t0, attempt)
     write_run(log, runs)
@@ -114,6 +105,110 @@ def train(
         table.add_row(key, _fmt(log.metrics.get(key)))
     table.add_row("adapter", log.artifacts["adapter_dir"])
     console.print(table)
+
+
+# --------------------------------------------------------------------------- run
+
+
+@app.command()
+def run(
+    config: Path = typer.Option(..., "--config", "-c", help="YAML run config."),
+    max_attempts: int = typer.Option(4, min=1, max=20, help="Stop after this many attempts."),
+    max_minutes: float = typer.Option(60, min=0.1, help="Total time budget for all attempts."),
+    force_oom: bool = typer.Option(
+        False, "--force-oom", help="Demo: batch size 16 and no pre-check, to trigger OOM recovery."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Tiny model on CPU; OOM is simulated from the VRAM estimate."
+    ),
+    gpu_memory_gb: float | None = typer.Option(
+        None, help="GPU memory in GiB. Default: detected, or a T4 (14.7) if there is no GPU."
+    ),
+    output_dir: Path | None = typer.Option(
+        None, help="Attempt outputs. Default: <train.output_dir>/<run_id>/attempt-N."
+    ),
+    runs_dir: Path | None = typer.Option(None, help="Where to write the run JSON."),
+) -> None:
+    """Train with VRAM pre-check, automatic OOM/NaN recovery and a time budget."""
+    from finetunepilot.config import load_run_config
+    from finetunepilot.runlog import start_run, write_run
+    from finetunepilot.runner import (
+        RecoveryPolicy,
+        detect_gpu_memory_gb,
+        make_subprocess_attempt,
+        measure_data_stats,
+        run_with_recovery,
+    )
+    from finetunepilot.tools.vram import GPU_MEMORY_GIB
+
+    try:
+        run_cfg = load_run_config(config)
+    except FileNotFoundError:
+        _exit_usage(f"Config file not found: {config}")
+    except (ValidationError, ValueError) as e:
+        _exit_usage(f"Invalid config {config}:\n{e}")
+
+    cfg = run_cfg.train
+    gpu_gb = gpu_memory_gb or detect_gpu_memory_gb() or GPU_MEMORY_GIB["t4"]
+    policy = RecoveryPolicy(
+        max_attempts=max_attempts, max_minutes=max_minutes, gpu_memory_gb=gpu_gb
+    )
+    try:
+        data_stats = measure_data_stats(cfg, dry_run)
+    except Exception as e:  # the pre-check then falls back to max_seq_length
+        console.print(
+            f"[yellow]Could not measure token lengths ({e}); using max_seq_length.[/yellow]"
+        )
+        data_stats = None
+
+    log = start_run(
+        "train", run_cfg.name, dry_run=dry_run, seed=cfg.seed,
+        config={**run_cfg.model_dump(), "policy": policy.model_dump(), "force_oom": force_oom,
+                "data_stats": data_stats},
+    )  # fmt: skip
+    runs = runs_dir or Path(run_cfg.runs_dir)
+    t0 = time.perf_counter()
+    path = write_run(log, runs)
+    console.print(
+        f"Run [bold]{log.run_id}[/bold]: up to {max_attempts} attempts / {max_minutes:g} min, "
+        f"GPU {gpu_gb:g} GiB, dry_run={dry_run}, force_oom={force_oom}. Log: {path}"
+    )
+
+    def save_progress(attempts) -> None:
+        log.attempts = attempts
+        write_run(log, runs)
+
+    seq_len = (data_stats or {}).get("max_tokens")
+    outcome = run_with_recovery(
+        cfg,
+        policy,
+        output_dir=output_dir or Path(cfg.output_dir) / log.run_id,
+        attempt_fn=make_subprocess_attempt(dry_run, simulate_oom_gpu_gb=gpu_gb, seq_len=seq_len),
+        gpu_memory_gb=gpu_gb,
+        data_stats=data_stats,
+        force_oom=force_oom,
+        on_attempt=save_progress,
+    )
+    log.attempts = outcome.attempts
+    log.precheck = outcome.precheck
+    # `train` is the YAML as written; these are what the runner actually started and ended with
+    # (they differ with --force-oom, or after pre-check / recovery fixes).
+    log.config["base_train"] = outcome.base_config.model_dump()
+    log.config["final_train"] = outcome.final_config.model_dump()
+    log.stop_reason = outcome.stop_reason
+    log.status = outcome.status
+    if outcome.result:
+        log.metrics = {**_train_metrics(outcome.result), "attempts": len(outcome.attempts)}
+        log.artifacts = {"adapter_dir": outcome.result["output_dir"]}
+    else:
+        log.metrics = {"attempts": len(outcome.attempts)}
+        log.errors = [a.error for a in outcome.attempts if a.error] or [outcome.stop_reason]
+    _finish(log, t0)
+    write_run(log, runs)
+    _print_attempts(log)
+    console.print(f"[bold]{outcome.status}[/bold]: {outcome.stop_reason}. Run log: {path}")
+    if outcome.status != "success":
+        raise typer.Exit(1)
 
 
 # --------------------------------------------------------------------------- eval
@@ -242,6 +337,40 @@ def _fail(
     path = write_run(log, runs_dir)
     console.print(f"[red]{what} failed:[/red] {message}\nRun log: {path}")
     raise typer.Exit(1)
+
+
+def _train_metrics(result: dict) -> dict:
+    history = result.get("loss_history") or []
+    return {
+        "first_loss": history[0]["loss"] if history else None,
+        **{
+            k: result.get(k)
+            for k in (
+                "final_loss", "train_loss", "steps", "train_runtime_s",
+                "peak_gpu_memory_mb", "peak_gpu_memory_reserved_mb",
+            )
+        },
+    }  # fmt: skip
+
+
+def _print_attempts(log: RunLog) -> None:
+    pre = log.precheck
+    if pre.get("status") in {"fits", "adjusted", "wont_fit"}:
+        before, after = pre["estimate_before"], pre["estimate_after"]
+        console.print(
+            f"VRAM pre-check ({pre['status']}): estimate {before['total_gb']:.2f} GiB -> "
+            f"{after['total_gb']:.2f} GiB, limit {after['limit_gb']:.2f} GiB"
+        )
+    elif pre:
+        console.print(f"VRAM pre-check skipped: {pre.get('reason')}")
+    table = Table(title="Attempts")
+    for col in ("#", "status", "error", "fix applied before this attempt", "seconds"):
+        table.add_column(col, overflow="fold")
+    for a in log.attempts:
+        table.add_row(
+            str(a.attempt), a.status, a.error_class or "-", a.fix or "-", str(a.duration_s)
+        )
+    console.print(table)
 
 
 def _fmt(value: object) -> str:
