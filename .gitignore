@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets
+.env
+*.env
+
+# Run logs and reports: keep only the committed examples
+runs/*
+!runs/examples/
+reports/*
+!reports/examples/
+
+# Training outputs
+outputs/
+adapters/
+*.safetensors
+*.bin
+*.pt
+checkpoint-*/
+wandb/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

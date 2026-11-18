@@ -1,0 +1,81 @@
+[project]
+name = "finetunepilot"
+version = "0.1.0"
+description = "An agent that plans, runs, diagnoses and compares QLoRA fine-tuning experiments."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    # torch is unpinned on purpose: Kaggle/Colab already ship a CUDA build and
+    # a pin here could make pip replace it with a mismatched one.
+    "torch",
+    "transformers>=4.46",
+    "trl>=0.12",
+    "peft>=0.13",
+    "datasets>=3.0",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "rich>=13.7",
+    "langgraph>=0.2",
+    "langgraph-checkpoint-sqlite>=2.0",
+    "anthropic>=0.40",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+# GPU-only libraries. Install on Kaggle/Colab with: pip install "finetunepilot[gpu] @ git+..."
+gpu = [
+    "bitsandbytes>=0.44",
+    "accelerate>=1.0",
+]
+
+[project.scripts]
+finetunepilot = "finetunepilot.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/finetunepilot"]
+
+# Only lock for platforms a laptop or Kaggle box actually runs.
+[tool.uv]
+environments = [
+    "sys_platform == 'darwin'",
+    "sys_platform == 'win32'",
+    "sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+]
+
+# On the laptop (no GPU) uv installs the small CPU-only torch wheel.
+# This only affects `uv sync`; pip on Kaggle ignores it and keeps its CUDA torch.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "slow: slower tests (e.g. dry-run training); skip with -m 'not slow'",
+]
