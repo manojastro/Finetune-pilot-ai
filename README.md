@@ -43,3 +43,31 @@ The sample data comes from `scripts/make_sample_data.py`. Train and test use dif
 templates and argument values, and a test checks that no request appears in both.
 
 Results: not yet measured.
+
+## Stage 2 — evaluation
+
+```bash
+# Base model, then base + adapter, then compare (GPU)
+finetunepilot eval --base-model Qwen/Qwen2.5-0.5B-Instruct --test data/sample/test.jsonl
+finetunepilot eval --base-model Qwen/Qwen2.5-0.5B-Instruct --adapter outputs/qwen05b_toolcall/<run_id>
+finetunepilot compare runs/eval-base-<...>.json runs/eval-tuned-<...>.json
+
+# Laptop: same commands with --dry-run (tiny random model, scores are meaningless)
+uv run finetunepilot eval --base-model tiny --dry-run
+```
+
+Each test prompt is built exactly as in training. The model generates greedily (up to 128 new
+tokens) and the output is parsed by `tools/scoring.py`:
+
+| metric | meaning |
+|---|---|
+| `json_valid` | a JSON object was found in the output |
+| `tool_name_accuracy` | the right tool was chosen |
+| `args_key_match` | right tool, and the same set of argument keys |
+| `args_exact_match` | right tool, and exactly the right arguments (the full call is correct) |
+| `format_ok` | the output is exactly `<tool_call>{json}</tool_call>`, the trained format |
+
+The eval run JSON stores every prediction, so wrong rows can be inspected later.
+On Kaggle, run `notebooks/02_eval_kaggle.ipynb`.
+
+Results: not yet measured.

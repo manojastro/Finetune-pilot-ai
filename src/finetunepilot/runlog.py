@@ -2,7 +2,7 @@
 
 Every training or eval run writes one JSON file (CLAUDE.md rule 4) with: config, hardware,
 each attempt, metrics, status, errors, duration, git commit, library versions and seed.
-Eval-only runs have an empty `attempts` list.
+Eval-only runs have an empty `attempts` list and store per-row `predictions`.
 """
 
 from __future__ import annotations
@@ -57,6 +57,29 @@ class RunLog(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
     artifacts: dict[str, str] = Field(default_factory=dict)
+    predictions: list[dict[str, Any]] = Field(default_factory=list)  # eval runs only
+
+
+def start_run(
+    kind: Literal["train", "eval"],
+    name: str,
+    *,
+    dry_run: bool,
+    seed: int | None,
+    config: dict[str, Any],
+) -> RunLog:
+    """A new 'running' log with the environment filled in (git, versions, hardware)."""
+    return RunLog(
+        run_id=new_run_id(f"{name}-dryrun" if dry_run else name),
+        kind=kind,
+        name=name,
+        dry_run=dry_run,
+        seed=seed,
+        git_commit=git_commit(),
+        library_versions=library_versions(),
+        hardware=collect_hardware(),
+        config=config,
+    )
 
 
 def now_iso() -> str:
