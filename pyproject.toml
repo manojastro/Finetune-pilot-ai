@@ -3,14 +3,16 @@ name = "finetunepilot"
 version = "0.1.0"
 description = "An agent that plans, runs, diagnoses and compares QLoRA fine-tuning experiments."
 readme = "README.md"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.11"
 dependencies = [
     # torch is unpinned on purpose: Kaggle/Colab already ship a CUDA build and
     # a pin here could make pip replace it with a mismatched one.
     "torch",
-    "transformers>=4.46",
-    "trl>=0.12",
-    "peft>=0.13",
+    # Lower bounds = the major versions the code is written and tested against
+    # (transformers 5 / trl 1.x renamed several training arguments).
+    "transformers>=5.20,<6",
+    "trl>=1.18,<2",
+    "peft>=0.21",
     "datasets>=3.0",
     "pydantic>=2.7",
     "pyyaml>=6.0",
@@ -73,9 +75,17 @@ extend-exclude = ["notebooks"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+# typer.Option(...) as a default is the normal Typer pattern.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+filterwarnings = [
+    # Raised inside peft/trl (not our code) under transformers 5.
+    "ignore:`is_gradient_checkpointing` is deprecated:FutureWarning",
+]
 markers = [
     "slow: slower tests (e.g. dry-run training); skip with -m 'not slow'",
 ]

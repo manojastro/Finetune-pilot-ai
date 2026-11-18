@@ -1,0 +1,30 @@
+# QLoRA fine-tune of Qwen2.5-0.5B-Instruct for tool calling, sized for one T4 (16 GB).
+name: qwen05b_toolcall
+runs_dir: runs
+notes: Stage 1 baseline on the 60-row synthetic tool-calling set.
+
+train:
+  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  dataset_path: data/sample/train.jsonl
+  output_dir: outputs/qwen05b_toolcall   # the run id is appended per run
+
+  # Longest row is 762 tokens with the Qwen tokenizer; 1024 leaves headroom, no truncation.
+  max_seq_length: 1024
+  per_device_batch_size: 4
+  grad_accum_steps: 2          # effective batch 8 -> 8 optimizer steps per epoch on 60 rows
+  learning_rate: 2.0e-4        # common QLoRA starting point
+  num_epochs: 5                # ~40 steps; the dataset is tiny
+  max_steps: -1                # -1 = use num_epochs
+  warmup_ratio: 0.1
+  logging_steps: 2
+
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+  load_in_4bit: true           # NF4 + double quantization
+  fp16: true                   # T4 has no bf16 support
+  bf16: false
+  gradient_checkpointing: false  # not needed for 0.5B at this size; stage 3 may turn it on
+  seed: 42

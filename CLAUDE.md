@@ -59,6 +59,9 @@ Finetune-pilot-ai/
   data/sample/        # tiny tool-calling dataset committed to repo
   src/finetunepilot/
     config.py         # pydantic config models
+    data.py           # load/validate dataset rows, apply chat template
+    dryrun.py         # tiny local model + tokenizer for CPU dry runs
+    templates/        # Qwen2.5 chat template copy (for offline dry runs)
     train.py          # QLoRA training via TRL + PEFT
     eval.py           # tool-call accuracy evaluation
     runner.py         # runs training with OOM retry + budget cap
@@ -68,6 +71,7 @@ Finetune-pilot-ai/
     agent/            # LangGraph graph, nodes, LLM client
     api/              # FastAPI app
   notebooks/          # Kaggle/Colab notebooks
+  scripts/            # one-off scripts (e.g. sample data generator)
   runs/               # run logs (gitignored except runs/examples/)
   reports/            # agent reports (gitignored except reports/examples/)
   docs/               # design notes (stage 6)
