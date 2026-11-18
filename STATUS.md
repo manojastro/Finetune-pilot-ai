@@ -8,8 +8,8 @@ Labels: **built** = code written · **tested** = tests pass on laptop (CPU) · *
 | 1 — baseline QLoRA training | yes | yes | not yet run | dry run passes on CPU; Kaggle T4 run pending |
 | 2 — evaluation | yes | yes | not yet run | base vs tuned on Kaggle pending |
 | 3 — VRAM estimate + OOM recovery | yes | yes | not yet run | `--force-oom` on Kaggle pending |
-| 4 — agent (LangGraph) | yes | yes | not yet run | 190 tests total (7 slow); dry run completes on CPU; real session pending |
-| 5 — API, UI, Docker | no | no | not yet run | |
+| 4 — agent (LangGraph) | yes | yes | not yet run | dry run completes on CPU; real session pending |
+| 5 — API, UI, Docker | yes | yes | n/a | 198 tests total (7 slow); image built and a dry-run session served from `docker run`; not deployed |
 | 6 — portfolio polish | no | no | n/a | |
 
 ## Stage 1 detail
@@ -89,6 +89,17 @@ Estimates for the default T4 config (these are estimates, not measurements):
 Dry-run numbers in agent reports are simulated by a toy quality function and are labelled so;
 they are not measurements.
 
+## Stage 5 detail
+
+| item | status |
+|---|---|
+| `api/app.py`: `/health`, `POST/GET /sessions`, `GET /sessions/{id}`, `GET /runs/{id}` | built, tested (TestClient, dry-run sessions) |
+| real sessions over the API | refused (403) unless `FINETUNEPILOT_ALLOW_REAL=1`; tested with a fake deps factory |
+| `api/static/index.html` run-history UI (no build step) | built; checked in headless Chromium (no JS errors, sessions/runs/report render) |
+| `Dockerfile` (CPU torch, non-root, healthcheck) | built locally (4.06 GB as reported by Docker); `docker run` served the UI and completed a dry-run session |
+| `.github/workflows/ci.yml` (ruff + `pytest -m "not slow"`) | written; not yet run on GitHub |
+| deployment | not done (left for later, as asked) |
+
 ## Decisions
 - Tool-call output format: Qwen native `<tool_call>{json}</tool_call>`.
 - torch is unpinned; on the laptop `uv sync` installs the CPU-only wheel, Kaggle keeps its own CUDA build.
@@ -123,4 +134,9 @@ they are not measurements.
 - The Anthropic client uses `claude-opus-5-5` from `configs/agent.yaml`, effort `medium`, and
   server-side refusal fallback (`fallbacks: default`); set `fallbacks: null` to turn it off.
 - Run ids got 32 random bits (was 16): a flaky test showed same-second collisions.
+- The API treats posting a session as approval of all its runs (no terminal to ask), and
+  refuses real sessions unless the server is started with `FINETUNEPILOT_ALLOW_REAL=1`.
+- The UI escapes all text before rendering markdown (reports contain LLM-written reasons).
+- The Docker base image is a build argument (`BASE_IMAGE`) so a Docker Hub mirror can be used
+  when Docker Hub rate-limits anonymous pulls; uv is installed from PyPI.
 - Tests block all network access (see `tests/conftest.py`).

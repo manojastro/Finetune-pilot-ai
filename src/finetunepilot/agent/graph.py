@@ -52,7 +52,9 @@ class SessionStore:
     """Files for one sessions directory: checkpoints, summaries, LLM logs."""
 
     def __init__(self, sessions_dir: str | Path):
-        self.dir = Path(sessions_dir)
+        self.dir = Path(sessions_dir)  # created on first write, not on import
+
+    def _ensure_dir(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def summary_path(self, session_id: str) -> Path:
@@ -63,6 +65,7 @@ class SessionStore:
         for run in summary.get("runs", []):
             run.pop("failures", None)  # keep the summary small
         summary["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+        self._ensure_dir()
         path = self.summary_path(state["session_id"])
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -84,6 +87,7 @@ class SessionStore:
         path = self.dir / f"{session_id}.llm.jsonl"
 
         def log(entry: dict[str, Any]) -> None:
+            self._ensure_dir()
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, default=str) + "\n")
 
@@ -91,6 +95,7 @@ class SessionStore:
 
     @contextmanager
     def checkpointer(self):
+        self._ensure_dir()
         conn = sqlite3.connect(self.dir / "checkpoints.sqlite", check_same_thread=False)
         try:
             yield SqliteSaver(conn)

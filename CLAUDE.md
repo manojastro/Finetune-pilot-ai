@@ -71,12 +71,14 @@ Finetune-pilot-ai/
     cli.py            # typer CLI
     tools/            # VRAM estimator, log parser, scoring, comparison
     agent/            # LangGraph graph, nodes, LLM client, toolbox, report
-    api/              # FastAPI app
+    api/              # FastAPI app + static/index.html (run-history UI)
   notebooks/          # Kaggle/Colab notebooks
   scripts/            # one-off scripts (e.g. sample data generator)
   runs/               # run logs (gitignored except runs/examples/)
   reports/            # agent reports (gitignored except reports/examples/)
   docs/               # design notes (stage 6)
+  Dockerfile          # CPU image: API, UI, dry runs
+  .github/workflows/  # CI: ruff + fast tests
   tests/
 ```
 

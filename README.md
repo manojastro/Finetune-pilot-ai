@@ -143,3 +143,49 @@ flowchart LR
 - State is checkpointed after every node (`runs/sessions/checkpoints.sqlite`).
 
 Results: not yet measured (only dry runs so far).
+
+## Stage 5 — API, run-history UI and Docker
+
+```bash
+# Local
+uv run uvicorn finetunepilot.api.app:app --port 8000     # UI at http://localhost:8000/
+
+# Docker (CPU: API, UI and dry runs)
+docker build -t finetunepilot .
+docker run -p 8000:8000 -v "$PWD/runs:/app/runs" -v "$PWD/reports:/app/reports" finetunepilot
+# If Docker Hub rate-limits you:
+docker build --build-arg BASE_IMAGE=mirror.gcr.io/library/python:3.11-slim -t finetunepilot .
+```
+
+| endpoint | what it does |
+|---|---|
+| `GET /` | single-page run history: sessions, runs with metrics, the report |
+| `GET /health` | liveness |
+| `POST /sessions` | start an agent session in the background (`dry_run` defaults to true) |
+| `GET /sessions` | list sessions, newest first |
+| `GET /sessions/{id}` | one session's state and report markdown |
+| `GET /runs/{run_id}` | one run log |
+
+Real sessions call the billed Anthropic API and need a GPU, so the API refuses them unless it
+is started with `FINETUNEPILOT_ALLOW_REAL=1`. Settings come from env vars:
+`FINETUNEPILOT_RUNS_DIR`, `FINETUNEPILOT_REPORTS_DIR`, `FINETUNEPILOT_SESSIONS_DIR`,
+`FINETUNEPILOT_AGENT_CONFIG`.
+
+### Running on a GPU host
+
+The Docker image is CPU-only on purpose. To train for real, run on a machine with a CUDA GPU
+(Kaggle/Colab T4, or a cloud VM) where PyTorch with CUDA is already installed:
+
+```bash
+git clone <this repo> && cd Finetune-pilot-ai
+pip install -e ".[gpu]"                 # keeps the machine's CUDA torch; adds bitsandbytes
+export CUDA_VISIBLE_DEVICES=0           # one GPU only
+finetunepilot run --config configs/qwen05b_toolcall.yaml          # training with recovery
+export ANTHROPIC_API_KEY=...            # only for the agent (billed)
+finetunepilot agent --objective "..." --yes                       # full agent session
+```
+
+To use the UI with real sessions, run the API on that GPU machine:
+`FINETUNEPILOT_ALLOW_REAL=1 uvicorn finetunepilot.api.app:app --host 0.0.0.0 --port 8000`.
+
+CI (`.github/workflows/ci.yml`) runs ruff and the fast tests on every push.

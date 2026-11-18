@@ -308,9 +308,7 @@ def agent(
 
 
 def _agent_deps(settings):
-    from finetunepilot.agent.llm import AnthropicClient
-    from finetunepilot.agent.nodes import AgentDeps
-    from finetunepilot.agent.toolbox import DryRunLLM, RealToolbox, SimulatedToolbox
+    from finetunepilot.agent.factory import build_deps
 
     def approver(text: str) -> bool:
         console.print(text, markup=False)
@@ -319,17 +317,7 @@ def _agent_deps(settings):
             return True
         return typer.confirm("Start this run?", default=False)
 
-    if settings.dry_run:
-        return AgentDeps(
-            llm=DryRunLLM(), toolbox=SimulatedToolbox(settings.runs_dir), approver=approver,
-            say=console.print,
-        )  # fmt: skip
-    return AgentDeps(
-        llm=AnthropicClient(settings.llm),
-        toolbox=RealToolbox(settings.runs_dir, say=console.print),
-        approver=approver,
-        say=console.print,
-    )
+    return build_deps(settings, approver, say=console.print)
 
 
 # --------------------------------------------------------------------------- helpers
