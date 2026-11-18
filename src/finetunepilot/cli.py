@@ -320,6 +320,40 @@ def _agent_deps(settings):
     return build_deps(settings, approver, say=console.print)
 
 
+# --------------------------------------------------------------------------- model card
+
+
+@app.command("model-card")
+def model_card(
+    train_run: Path = typer.Option(..., help="runs/<id>.json of the training run."),
+    base_eval: Path = typer.Option(..., help="runs/<id>.json of the base-model eval."),
+    tuned_eval: Path = typer.Option(..., help="runs/<id>.json of the adapter eval."),
+    repo_id: str = typer.Option(..., help="Hugging Face repo, e.g. you/qwen25-05b-toolcall-qlora."),
+    out: Path | None = typer.Option(
+        None, help="Where to write the card. Default: <adapter>/README.md"
+    ),
+) -> None:
+    """Write a Hugging Face model card from run logs. Uploads nothing."""
+    from finetunepilot.model_card import ModelCardError, render_model_card, upload_command
+    from finetunepilot.runlog import read_run
+
+    try:
+        logs = [read_run(p) for p in (train_run, base_eval, tuned_eval)]
+        card = render_model_card(*logs, repo_id=repo_id)
+    except FileNotFoundError as e:
+        _exit_usage(f"Run log not found: {e.filename}")
+    except (ModelCardError, ValidationError) as e:
+        _exit_usage(f"Cannot write the model card: {e}")
+    adapter_dir = logs[2].config["adapter"]
+    target = out or Path(adapter_dir) / "README.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(card, encoding="utf-8")
+    console.print(f"Model card written to {target}")
+    console.print("Nothing was uploaded. After reviewing it, push with:", markup=False)
+    console.print("  hf auth login", markup=False)
+    console.print("  " + upload_command(repo_id, adapter_dir), markup=False)
+
+
 # --------------------------------------------------------------------------- helpers
 
 

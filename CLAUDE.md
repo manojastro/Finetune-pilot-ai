@@ -61,13 +61,14 @@ Finetune-pilot-ai/
     config.py         # pydantic config models
     data.py           # load/validate dataset rows, apply chat template
     dryrun.py         # tiny local model + tokenizer for CPU dry runs
-    templates/        # Qwen2.5 chat template copy (for offline dry runs)
+    templates/        # Qwen2.5 chat template copy (offline dry runs) + model card template
     train.py          # QLoRA training via TRL + PEFT
     eval.py           # tool-call accuracy evaluation
     runner.py         # runs training with OOM retry + budget cap
     worker.py         # one training attempt in its own subprocess
     jobs.py           # one train/eval job -> runs/<run_id>.json (shared by CLI and agent)
     runlog.py         # writes/reads runs/*.json
+    model_card.py     # Hugging Face model card from run logs (never uploads)
     cli.py            # typer CLI
     tools/            # VRAM estimator, log parser, scoring, comparison
     agent/            # LangGraph graph, nodes, LLM client, toolbox, report
@@ -76,7 +77,7 @@ Finetune-pilot-ai/
   scripts/            # one-off scripts (e.g. sample data generator)
   runs/               # run logs (gitignored except runs/examples/)
   reports/            # agent reports (gitignored except reports/examples/)
-  docs/               # design notes (stage 6)
+  docs/               # DESIGN.md, INTERVIEW_NOTES.md, DEMO_SCRIPT.md
   Dockerfile          # CPU image: API, UI, dry runs
   .github/workflows/  # CI: ruff + fast tests
   tests/
